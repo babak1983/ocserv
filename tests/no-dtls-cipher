@@ -21,11 +21,8 @@
 # This tests support for anyconnect's DTLS1.2 support
 
 PKG_CONFIG="${PKG_CONFIG:-/usr/bin/pkg-config}"
-CIPHER12_NAME="AES128-GCM-SHA256"
-GNUTLS_NAME="(DTLS1.2)-(RSA)-(AES-128-GCM)"
-
-${PKG_CONFIG} --atleast-version=8.02 openconnect
-test $? != 0 && exit 77
+CIPHER_NAME="UNKNOWN"
+GNUTLS_NAME=""
 
 . cipher-common.sh
 
