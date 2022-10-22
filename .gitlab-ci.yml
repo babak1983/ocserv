@@ -1,0 +1,467 @@
+stages:
+ - testing
+ - deploy
+
+variables:
+  BUILD_IMAGES_PROJECT: openconnect/build-images
+  ALPINE_BUILD: buildenv-alpine
+  DEBIAN_BUILD: buildenv-debian
+  DEBIAN_X86_CROSS_BUILD: buildenv-debian-x86
+  FEDORA_BUILD: buildenv-fedora35
+  UBUNTU16_BUILD: buildenv-ubuntu
+  UBUNTU20_BUILD: buildenv-ubuntu20
+  CENTOS8_BUILD: buildenv-centos8
+  CENTOS7_BUILD: buildenv-centos7
+  CENTOS6_BUILD: buildenv-centos6
+  MINIMALCONFIG: "--without-protobuf --without-libtalloc-prefix --without-libnl --without-maxmind --without-geoip --without-libreadline-prefix --without-liboath --without-libc-prefix --without-pam --without-radius --without-libcrypt-prefix --without-utmp --without-libutil-prefix --without-libwrap --without-libwrap-prefix --without-libseccomp-prefix --without-libsystemd-prefix --without-http-parser --without-lz4 --without-gssapi --without-pcl-lib --disable-rpath --disable-seccomp --disable-anyconnect-compat --disable-compression"
+  JOBS: 2
+
+Debian:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$DEBIAN_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure --without-nuttcp-tests --enable-oidc-auth
+  - make -j$JOBS
+  - export OCSERV_ALLOW_BROKEN_CLIENTS=1
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+i386/Debian:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$DEBIAN_X86_CROSS_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+# Radius seems to be malfunctioning on i386 build
+  - ./configure --enable-oidc-auth --without-radius
+  - make -j$JOBS
+  - make check -j$JOBS VERBOSE=1
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+Ubuntu16.04:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$UBUNTU16_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure --without-nuttcp-tests
+  - make -j$JOBS
+# this version of openconnect doesn't work with IPv6 only
+  - make check -j$JOBS XFAIL_TESTS="ipv6-iface ipv6-small-net"
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+Ubuntu20.04:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$UBUNTU20_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure --enable-oidc-auth --enable-latency-stats
+  - make -j$JOBS
+  - export MALLOC_CHECK_=3
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+Centos8:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$CENTOS8_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure --without-http-parser
+  - chmod og-w tests/data/raddb
+  - chmod og-w tests/data/raddb/*
+  - make -j$JOBS
+  - export OCSERV_ALLOW_BROKEN_CLIENTS=1
+  - make check VERBOSE=1 -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+Centos7:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$CENTOS7_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure
+  - make -j$JOBS
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+Coverity:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$CENTOS8_BUILD
+  only:
+  - schedules
+  - coverity
+  script:
+  - wget --quiet https://scan.coverity.com/download/linux64 --post-data "token=$COVERITY_SCAN_TOKEN&project=$COVERITY_SCAN_PROJECT_NAME" -O /tmp/coverity_tool.tgz
+  - tar xfz /tmp/coverity_tool.tgz
+  - git submodule update --init
+  - autoreconf -fvi
+  - CFLAGS="-g -O0" ./configure --disable-maintainer-mode --enable-latency-stats
+  - cov-analysis-linux64-*/bin/cov-build --dir cov-int make -j$JOBS
+  - tar cfz cov-int.tar.gz cov-int
+  - curl https://scan.coverity.com/builds?project=$COVERITY_SCAN_PROJECT_NAME
+    --form token=$COVERITY_SCAN_TOKEN --form email=n.mavrogiannopoulos@gmail.com
+    --form file=@cov-int.tar.gz --form version="`git describe --tags`"
+    --form description="CI build"
+  tags:
+  - shared
+  - linux
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - cov-int/*.txt
+
+# Test building with musl
+musl/Alpine:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$ALPINE_BUILD
+  script:
+  - autoreconf -fvi
+  - ./configure --disable-maintainer-mode --with-werror
+  - make -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    untracked: true
+    when: on_failure
+
+Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  # ensure gcov scripts are writable
+  - umask 000
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - CFLAGS="-g -O0" ./configure --enable-code-coverage --with-kerberos-tests --enable-oidc-auth
+  - make -j$JOBS
+  - make check -j$JOBS COVERAGE=1 VERBOSE=1
+  - make dist
+  - make local-code-coverage-output
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  artifacts:
+    expire_in: 1 day
+    untracked: true
+    when: always
+
+noprocfs/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - ac_cv_file_FILE__proc_self_exe=no ./configure --disable-namespaces
+  - make -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    untracked: true
+    when: on_failure
+
+clang/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - CC=clang ./configure --with-werror
+  - make -j$JOBS
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    untracked: true
+    when: on_failure
+
+# Tests seccomp filters by asking seccomp to fail with a trap
+seccomp/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure --with-kerberos-tests --enable-oidc-auth --with-seccomp-trap
+  - make -j$JOBS
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    untracked: true
+    when: on_failure
+
+minimal:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$CENTOS7_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure $MINIMALCONFIG
+  - make -j$JOBS
+  - make check -j$JOBS XFAIL_TESTS="lz4-compression lzs-compression"
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - tests/*.log
+
+# Build a minimal version with every optional feature disabled
+minimal/Ubuntu20.04:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$UBUNTU20_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure $MINIMALCONFIG
+  - make -j$JOBS
+  - make check -j$JOBS XFAIL_TESTS="lz4-compression lzs-compression"
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - ./tests/*.log
+
+# We do not compile with PAM under address sanitizer since we are using co-routines
+# without instrumentation for sanitizer.
+asan/clang/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - CC=clang CFLAGS="-fsanitize=address -fno-optimize-sibling-calls -fno-omit-frame-pointer -g -O1" ./configure --without-pam --without-asan-broken-tests
+  - make -j$JOBS
+  - make check -j$JOBS
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - tests/*.log
+
+ubsan/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - chmod -R o-w tests/data/raddb
+  - git submodule update --init
+  - autoreconf -fvi
+  - export UBCFLAGS="-Wall -Wextra -fsanitize=undefined -fsanitize=bool -fsanitize=alignment -fsanitize=null -fsanitize=bounds-strict -fsanitize=enum -fno-sanitize-recover -g -O2 -Werror"
+  - CFLAGS="$UBCFLAGS" ./configure
+  - make -j$JOBS
+  - make check -j$JOBS CFLAGS="$UBCFLAGS -Wno-unused-function -Wno-unused-parameter"
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - ./*.log
+      - tests/*.log
+
+static-analyzers/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - autoreconf -fvi -Werror
+  - scan-build ./configure
+  - scan-build --status-bugs -o scan-build-src make -j$JOBS
+  - cppcheck --force -q -Isrc/ -Isrc/occtl -Igl/ -I. --error-exitcode=1 src/ -i src/inih -USELF_TEST
+  tags:
+  - shared
+  - linux
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - scan-build-src/*
+
+.FreeBSD:
+  stage: testing
+  script:
+  - git submodule update --init
+  - sh autogen.sh
+  - mkdir build
+  - cd build
+  - LIBS="-L/usr/local/lib" ../configure --disable-nls --without-root-tests
+  - gmake -j$JOBS
+  - gmake check -j$JOBS
+  tags:
+  - freebsd
+  only:
+  - branches@openconnect/ocserv
+  except:
+  - tags
+  - schedules
+  artifacts:
+    expire_in: 1 week
+    when: on_failure
+    paths:
+      - build/*.log
+      - build/tests/*.log
+
+pages:
+  stage: deploy
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - mkdir -p public/coverage
+  - make V=1 CODE_COVERAGE_OUTPUT_DIRECTORY=public/coverage CODE_COVERAGE_BRANCH_COVERAGE=1 code-coverage-capture
+  - make CODE_COVERAGE_OUTPUT_DIRECTORY=public/coverage local-code-coverage-output
+  tags:
+  - shared
+  - linux
+  dependencies:
+  - Fedora
+  only:
+  - master@openconnect/ocserv
+  artifacts:
+    paths:
+    - public
+
+triage:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - gem install gitlab-triage
+  - gitlab-triage --source-id openconnect/ocserv --token "$API_TOKEN"
+  tags:
+  - shared
+  - linux
+  only:
+  - schedules
+
+codespell/Fedora:
+  stage: testing
+  image: $CI_REGISTRY/$BUILD_IMAGES_PROJECT:$FEDORA_BUILD
+  script:
+  - git submodule update --init
+  - autoreconf -fvi
+  - ./configure
+  - make codespell
